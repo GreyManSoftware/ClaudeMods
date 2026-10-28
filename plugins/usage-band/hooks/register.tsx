@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Limit, Snapshot, Variant } from '../types'
+import type { Limit, SharedLimits, Snapshot, Variant } from '../types'
 
 const snapshot = atom({ plugin: 'usage-band', key: 'snapshot' } as const, null)
 const now = atom({ plugin: 'usage-band', key: 'now' } as const, 0)
@@ -57,18 +57,38 @@ const hitRate = (snap: Snapshot): number | undefined => {
 
 const hitText = (pct: number | undefined): string => (pct === undefined ? '—' : `${pct}% hit`)
 
+// Rate limits arrive only with a session's own API responses, so an idle session's go stale. A session that
+// just got a reply shares its reading through $.store, and every session shows whichever reading is newest.
 async function refresh($: EngineInterface, fromResponse?: Partial<Snapshot>) {
   const usage = await $.session.usage()
   const at = await $.clock.now()
-  await update($, snapshot, prev => ({
-    ...(prev ?? { limits: [], contextWindow: usage.context.window }),
-    ...fromResponse,
-    contextPercent: usage.context.percent,
-    contextTokens: usage.context.tokens,
-    contextWindow: usage.context.window,
-    limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
-    costUsd: usage.cost?.usd,
-  }))
+  const own: Limit[] = usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
+
+  if (fromResponse && own.length > 0) {
+    const reading: SharedLimits = { at, limits: own }
+    await $.store.set('limits', reading)
+  }
+  const shared = (await $.store.get('limits')) as SharedLimits | undefined
+
+  await update($, snapshot, prev => {
+    const ownAt = fromResponse ? at : prev?.limitsAt ?? 0
+    const isSharedNewer = shared !== undefined && shared.at > ownAt
+    return {
+      ...(prev ?? { limits: [], contextWindow: usage.context.window }),
+      ...fromResponse,
+      contextPercent: usage.context.percent,
+      contextTokens: usage.context.tokens,
+      contextWindow: usage.context.window,
+      limits: isSharedNewer ? shared.limits : own,
+      limitsAt: isSharedNewer ? shared.at : ownAt,
+      costUsd: usage.cost?.usd,
+    }
+  })
+
+  // The layout follows the last choice made in any session.
+  const saved = (await $.store.get('variant')) as Variant | undefined
+  if (saved && VARIANTS.includes(saved)) await update($, variant, () => saved)
+
   await update($, now, () => at)
 }
 
@@ -77,11 +97,9 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    const saved = (await $.store.get('variant')) as Variant | undefined
-    if (saved && VARIANTS.includes(saved)) await update($, variant, () => saved)
     await refresh($)
     tick?.cancel()
-    // Keeps reset times and limits current between turns; usage() without a breakdown is free.
+    // Picks up other sessions' readings and layout choice; usage() without a breakdown is free.
     tick = $.clock.every(60_000, () => void refresh($))
     return result
   })
