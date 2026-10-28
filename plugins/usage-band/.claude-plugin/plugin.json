@@ -1,0 +1,8 @@
+{
+  "name": "usage-band",
+  "version": "0.1.0",
+  "description": "A colour-coded band above the prompt: context window, session and weekly usage, and cache hit rate, in five layouts",
+  "author": { "name": "GreyManSoftware" },
+  "repository": "https://github.com/GreyManSoftware/ClaudeMods",
+  "types": "./types/index.d.ts"
+}

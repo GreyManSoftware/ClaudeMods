@@ -1,0 +1,12 @@
+{
+  "name": "claude-mods",
+  "description": "Mods (hook-module plugins) for Claude Code and the Claude desktop app",
+  "owner": { "name": "GreyManSoftware" },
+  "plugins": [
+    {
+      "name": "usage-band",
+      "source": "./plugins/usage-band",
+      "description": "A colour-coded band above the prompt: context window, session and weekly usage, and cache hit rate"
+    }
+  ]
+}
