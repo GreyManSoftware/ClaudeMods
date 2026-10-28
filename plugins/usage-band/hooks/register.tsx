@@ -1,14 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Limit, SharedLimits, Snapshot, Variant } from '../types'
+import type { Limit, SharedLayout, SharedLimits, Snapshot, Variant } from '../types'
 
 const snapshot = atom({ plugin: 'usage-band', key: 'snapshot' } as const, null)
 const now = atom({ plugin: 'usage-band', key: 'now' } as const, 0)
-const variant = atom({ plugin: 'usage-band', key: 'variant' } as const, 'heat')
+const variant = atom({ plugin: 'usage-band', key: 'variant' } as const, 'compact')
 const isHidden = atom({ plugin: 'usage-band', key: 'isHidden' } as const, false)
 
-const VARIANTS: readonly Variant[] = ['heat', 'compact', 'bars', 'chips', 'detailed']
+const VARIANTS: readonly Variant[] = ['compact', 'heat', 'bars', 'chips', 'detailed']
 
 type Level = 'success' | 'warning' | 'error' | 'subtle'
 
@@ -59,7 +59,7 @@ const hitText = (pct: number | undefined): string => (pct === undefined ? '—' 
 
 // Rate limits arrive only with a session's own API responses, so an idle session's go stale. A session that
 // just got a reply shares its reading through $.store, and every session shows whichever reading is newest.
-async function refresh($: EngineInterface, fromResponse?: Partial<Snapshot>) {
+async function refresh($: EngineInterface, startedAt: number, fromResponse?: Partial<Snapshot>) {
   const usage = await $.session.usage()
   const at = await $.clock.now()
   const own: Limit[] = usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
@@ -85,22 +85,27 @@ async function refresh($: EngineInterface, fromResponse?: Partial<Snapshot>) {
     }
   })
 
-  // The layout follows the last choice made in any session.
-  const saved = (await $.store.get('variant')) as Variant | undefined
-  if (saved && VARIANTS.includes(saved)) await update($, variant, () => saved)
+  // Every session starts compact; a layout picked in any open session after this one started is followed.
+  const picked = (await $.store.get('layout')) as SharedLayout | undefined
+  if (picked && picked.at > startedAt && VARIANTS.includes(picked.variant)) {
+    await update($, variant, () => picked.variant)
+  }
 
   await update($, now, () => at)
 }
 
 export const register: Register = on => {
   let tick: { cancel: () => void } | undefined
+  let startedAt = 0
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await refresh($)
+    startedAt = await $.clock.now()
+    await update($, variant, () => 'compact')
+    await refresh($, startedAt)
     tick?.cancel()
     // Picks up other sessions' readings and layout choice; usage() without a breakdown is free.
-    tick = $.clock.every(60_000, () => void refresh($))
+    tick = $.clock.every(60_000, () => void refresh($, startedAt))
     return result
   })
 
@@ -108,7 +113,7 @@ export const register: Register = on => {
     const result = await next(e)
     // Subagents run on their own caches; only the main loop's matters here.
     if (e.agentId === undefined && e.usage) {
-      await refresh($, {
+      await refresh($, startedAt, {
         lastCacheRead: e.usage.cache_read_input_tokens,
         lastCacheWrite: e.usage.cache_creation_input_tokens,
         lastInput: e.usage.input_tokens,
@@ -140,7 +145,8 @@ export const register: Register = on => {
           onPress={async () => {
             const nextVariant = VARIANTS[(VARIANTS.indexOf(v) + 1) % VARIANTS.length]
             await update($, variant, () => nextVariant)
-            await $.store.set('variant', nextVariant)
+            const layout: SharedLayout = { variant: nextVariant, at: await $.clock.now() }
+            await $.store.set('layout', layout)
           }}
         />
         <Button key="hide" plain dimColor label="✕" onPress={() => update($, isHidden, () => true)} />

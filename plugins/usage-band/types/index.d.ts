@@ -2,6 +2,9 @@ export type Variant = 'heat' | 'compact' | 'bars' | 'chips' | 'detailed'
 
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
+// The layout last picked in any session, and when: open sessions follow picks made after they started.
+export type SharedLayout = { variant: Variant; at: number }
+
 // What a session that just got a reply shares through $.store with every other session.
 export type SharedLimits = { at: number; limits: Limit[] }
 
